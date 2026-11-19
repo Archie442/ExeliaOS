@@ -1,64 +1,129 @@
 
 -- ============================================================================
 -- Exelia OS - startup.lua
--- Lanceur et installateur automatique
+-- Lanceur + installateur automatique
 -- ============================================================================
-
-local REPO = "https://raw.githubusercontent.com/Archie442/ExeliaOS/main/"
-local API = "https://api.github.com/repos/Archie442/ExeliaOS/git/trees/main?recursive=1"
 
 if not term.isColor() then
     print("Exelia OS necessite un ordinateur avance (ecran couleur).")
     return
 end
 
+local REPO = "https://raw.githubusercontent.com/Archie442/ExeliaOS/main/"
+local API = "https://api.github.com/repos/Archie442/ExeliaOS/git/trees/main?recursive=1"
+
 -- ============================================================================
--- INSTALLATION AUTOMATIQUE
+-- OUTILS
+-- ============================================================================
+
+local function encodePath(path)
+    return path:gsub("([^%w%-_%.~/])", function(char)
+        return string.format("%%%02X", string.byte(char))
+    end)
+end
+
+local function download(url)
+    local response, err = http.get(url, {
+        ["User-Agent"] = "ExeliaOS",
+        ["Accept"] = "application/vnd.github+json"
+    })
+
+    if not response then
+        return nil, tostring(err or "Connexion impossible")
+    end
+
+    local code = response.getResponseCode()
+    local content = response.readAll()
+    response.close()
+
+    if code < 200 or code >= 300 then
+        return nil, "Erreur HTTP " .. tostring(code)
+    end
+
+    return content
+end
+
+local function writeFile(path, content)
+    local parent = fs.getDir(path)
+
+    if parent ~= "" then
+        if fs.exists(parent) and not fs.isDir(parent) then
+            return false, "Un fichier bloque le dossier : " .. parent
+        end
+
+        if not fs.exists(parent) then
+            fs.makeDir(parent)
+        end
+    end
+
+    if fs.exists(path) then
+        if fs.isDir(path) then
+            return false, "Un dossier bloque le fichier : " .. path
+        end
+        return true
+    end
+
+    local file, err = fs.open(path, "w")
+
+    if not file then
+        return false, "Impossible de creer " .. path .. " : " .. tostring(err)
+    end
+
+    local ok, writeError = pcall(function()
+        file.write(content)
+        file.close()
+    end)
+
+    if not ok then
+        pcall(function() file.close() end)
+
+        if fs.exists(path) then
+            fs.delete(path)
+        end
+
+        return false, "Erreur d'ecriture : " .. tostring(writeError)
+    end
+
+    return true
+end
+
+-- ============================================================================
+-- INSTALLATEUR
 -- ============================================================================
 
 local function install()
+
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.white)
     term.clear()
     term.setCursorPos(2, 2)
 
-    print("Exelia OS - Installation")
+    print("Exelia OS")
+    print("Installation automatique")
     print("------------------------------")
-    print("Verification des fichiers...")
 
     if not http then
         return false, "HTTP indisponible."
     end
 
-    local function request(url)
-        local response, err = http.get(url, nil, true)
+    -- Recuperation de l'arborescence GitHub
 
-        if not response then
-            return nil, err or "Erreur HTTP"
-        end
+    print("Connexion a GitHub...")
 
-        local code = response.getResponseCode()
-        local data = response.readAll()
-        response.close()
-
-        if code < 200 or code >= 300 then
-            return nil, "HTTP " .. tostring(code)
-        end
-
-        return data
-    end
-
-    -- Recuperation de la liste complete des fichiers du depot
-    local data, err = request(API)
+    local data, err = download(API)
 
     if not data then
-        return false, "Impossible de contacter GitHub : " .. tostring(err)
+        return false, err
     end
 
-    local success, tree = pcall(textutils.unserializeJSON, data)
+    local decoded, tree = pcall(textutils.unserializeJSON, data)
 
-    if not success or type(tree) ~= "table" or type(tree.tree) ~= "table" then
-        return false, "Reponse GitHub invalide."
+    if not decoded or type(tree) ~= "table" or type(tree.tree) ~= "table" then
+        return false, "Impossible de lire l'arborescence GitHub."
+    end
+
+    if tree.truncated then
+        return false, "Depot trop volumineux pour une installation complete."
     end
 
     local files = {}
@@ -69,91 +134,83 @@ local function install()
         end
     end
 
-    local installed = 0
     local total = #files
+    local installed = 0
+    local skipped = 0
+
+    print("Fichiers trouves : " .. total)
+    print()
+
+    -- Telechargement des fichiers
 
     for i, path in ipairs(files) do
-        if not fs.exists(path) then
-            local parent = fs.getDir(path)
 
-            if parent ~= "" and not fs.exists(parent) then
-                fs.makeDir(parent)
-            end
+        term.setCursorPos(2, 7)
+        term.clearLine()
+        term.setTextColor(colors.lightBlue)
+        print("[" .. i .. "/" .. total .. "] " .. path)
 
-            term.setCursorPos(2, 6)
-            term.clearLine()
-            print("Telechargement : " .. path)
-
-            local content, downloadError = request(REPO .. path)
+        if fs.exists(path) then
+            skipped = skipped + 1
+        else
+            local content, downloadError = download(REPO .. encodePath(path))
 
             if not content then
-                return false, "Erreur sur " .. path .. " : " .. tostring(downloadError)
+                return false, "Telechargement impossible : " .. path
+                    .. "\n" .. tostring(downloadError)
             end
 
-            local temp = path .. ".exelia_tmp"
-            local file = fs.open(temp, "w")
+            local success, writeError = writeFile(path, content)
 
-            if not file then
-                return false, "Impossible de creer : " .. path
+            if not success then
+                return false, writeError
             end
 
-            file.write(content)
-            file.close()
-
-            if fs.getSize(temp) == 0 then
-                fs.delete(temp)
-                return false, "Fichier vide : " .. path
-            end
-
-            if fs.exists(path) then
-                fs.delete(path)
-            end
-
-            local copied = fs.open(path, "w")
-            local source = fs.open(temp, "r")
-
-            if not copied or not source then
-                if copied then copied.close() end
-                if source then source.close() end
-                return false, "Impossible d'ecrire : " .. path
-            end
-
-            copied.write(source.readAll())
-            source.close()
-            copied.close()
-
-            fs.delete(temp)
             installed = installed + 1
         end
 
-        term.setCursorPos(2, 8)
+        term.setCursorPos(2, 9)
+        term.setTextColor(colors.white)
         term.clearLine()
-        print("Progression : " .. i .. "/" .. total)
+        print("Installation : " .. math.floor(i / math.max(total, 1) * 100) .. "%")
     end
 
-    term.setCursorPos(2, 10)
+    term.setCursorPos(2, 11)
+    term.setTextColor(colors.lime)
     print("Installation terminee !")
-    print(installed .. " fichier(s) installe(s).")
 
-    sleep(1.5)
+    print()
+    print("Nouveaux fichiers : " .. installed)
+    print("Fichiers existants : " .. skipped)
+
+    sleep(2)
+
     return true
 end
 
-local ok, installError = install()
+-- ============================================================================
+-- LANCEMENT DE L'INSTALLATEUR
+-- ============================================================================
 
-if not ok then
+local success, installError = install()
+
+if not success then
+
     term.setBackgroundColor(colors.black)
     term.setTextColor(colors.red)
     term.clear()
     term.setCursorPos(2, 2)
+
     print("Exelia OS - Erreur d'installation")
+    print("------------------------------")
     print()
     print(tostring(installError))
     print()
+    term.setTextColor(colors.white)
     print("Verifiez votre connexion Internet.")
-    print("Appuyez sur une touche pour redemarrer.")
+    print("Appuyez sur une touche pour quitter.")
+
     os.pullEventRaw("key")
-    os.reboot()
     return
 end
 
@@ -164,13 +221,16 @@ end
 local X = {
     VERSION = "4.0",
     NAME = "Exelia OS",
+
     fs = fs,
     unpack = table.unpack or unpack,
     native = term.native(),
+
     S = {},
     wins = {},
     notifs = {},
     appList = {},
+
     cfg = {
         user = nil,
         pass = "",
@@ -189,10 +249,11 @@ local MODULES = {
 }
 
 -- ============================================================================
--- RECUPERATION APRES UNE MISE A JOUR RATEE
+-- RESTAURATION
 -- ============================================================================
 
 local function recover()
+
     local backup = "System/config/backup"
     local pending = "System/config/update.pending"
 
@@ -201,22 +262,36 @@ local function recover()
     end
 
     local function walk(dir)
-        for _, name in ipairs(fs.list(fs.combine(backup, dir))) do
-            local rel = fs.combine(dir, name)
 
-            if fs.isDir(fs.combine(backup, rel)) then
+        for _, name in ipairs(fs.list(fs.combine(backup, dir))) do
+
+            local rel = fs.combine(dir, name)
+            local source = fs.combine(backup, rel)
+
+            if fs.isDir(source) then
                 walk(rel)
             else
-                local f = fs.open(fs.combine(backup, rel), "r")
+
+                local f = fs.open(source, "r")
                 local data = f and f.readAll()
 
-                if f then f.close() end
+                if f then
+                    f.close()
+                end
 
-                local o = data and fs.open(rel, "w")
+                if data then
+                    local parent = fs.getDir(rel)
 
-                if o then
-                    o.write(data)
-                    o.close()
+                    if parent ~= "" and not fs.exists(parent) then
+                        fs.makeDir(parent)
+                    end
+
+                    local output = fs.open(rel, "w")
+
+                    if output then
+                        output.write(data)
+                        output.close()
+                    end
                 end
             end
         end
@@ -232,35 +307,49 @@ end
 -- DEMARRAGE
 -- ============================================================================
 
-local success, err = pcall(function()
+local ok, err = pcall(function()
+
     for _, name in ipairs(MODULES) do
+
         local path = "System/run/" .. name .. ".lua"
 
-        local fn, e = loadfile(path)
+        local fn, loadError = loadfile(path)
 
         if not fn then
-            error("Chargement de " .. path .. " impossible : " .. tostring(e), 0)
+            error(
+                "Chargement de " .. path .. " impossible : "
+                .. tostring(loadError),
+                0
+            )
         end
 
         fn(X)
     end
 
     X.start()
+
 end)
 
-if not success then
+-- ============================================================================
+-- GESTION DES ERREURS
+-- ============================================================================
+
+if not ok then
+
     if X.restorePalette then
         pcall(X.restorePalette)
     end
 
     term.redirect(term.native())
+
     term.setBackgroundColor(colors.blue)
     term.setTextColor(colors.white)
     term.clear()
     term.setCursorPos(2, 2)
 
-    print("Exelia OS - erreur systeme")
-    term.setCursorPos(2, 4)
+    print("Exelia OS - Erreur systeme")
+    print("------------------------------")
+    print()
     print(tostring(err))
     print()
 
@@ -270,15 +359,13 @@ if not success then
         restored = recover()
     end
 
-    print(restored
-        and "Version precedente restauree. Redemarrage..."
-        or "Appuyez sur une touche pour redemarrer.")
-
     if restored then
+        print("Version precedente restauree.")
+        print("Redemarrage...")
         sleep(2)
+        os.reboot()
     else
+        print("Appuyez sur une touche pour quitter.")
         os.pullEventRaw("key")
     end
-
-    os.reboot()
 end
