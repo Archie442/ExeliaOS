@@ -105,7 +105,24 @@ local function install()
                 return false, "Fichier vide : " .. path
             end
 
-            fs.move(temp, path)
+            if fs.exists(path) then
+                fs.delete(path)
+            end
+
+            local copied = fs.open(path, "w")
+            local source = fs.open(temp, "r")
+
+            if not copied or not source then
+                if copied then copied.close() end
+                if source then source.close() end
+                return false, "Impossible d'ecrire : " .. path
+            end
+
+            copied.write(source.readAll())
+            source.close()
+            copied.close()
+
+            fs.delete(temp)
             installed = installed + 1
         end
 
