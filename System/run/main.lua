@@ -291,6 +291,7 @@ local function start()
     draw()
     if not bootOk then   -- demarrage reussi : on oublie la restauration automatique
       bootOk = true
+      X.booted = true
       pcall(fs.delete, X.paths.PENDING_FILE)
     end
     local ev = table.pack(os.pullEventRaw())

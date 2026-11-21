@@ -1,0 +1,14 @@
+{
+  "version": "4.0",
+  "files": [
+    "startup.lua",
+    "System/run/display.lua",
+    "System/run/fundamental_apps.lua",
+    "System/run/main.lua",
+    "System/run/ressource_loader.lua",
+    "System/IntegratedApps/appstore.as",
+    "System/IntegratedApps/calculator.as",
+    "System/IntegratedApps/editor.as",
+    "System/IntegratedApps/messages.as"
+  ]
+}

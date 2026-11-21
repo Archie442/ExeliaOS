@@ -22,7 +22,7 @@ local BACKUP_DIR     = CFG_DIR .. "/backup"
 local PENDING_FILE   = CFG_DIR .. "/update.pending"
 local STORE_CODE     = "MBLQ7iyu"                -- catalogue public (JSON) sur Pastebin
 local STORE_URL      = "https://pastebin.com/raw/" .. STORE_CODE
-local DEFAULT_REPO   = "https://raw.githubusercontent.com/exelia-os/exelia-os/main/"
+local DEFAULT_REPO   = "https://raw.githubusercontent.com/Archie442/ExeliaOS/main/"
 
 -- ------------------------------------------------------------- fichiers --
 local function readFile(p)
